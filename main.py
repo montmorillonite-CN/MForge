@@ -1,8 +1,8 @@
-import os
-import tkinter as tk
+from os import listdir
+from os.path import *
 from tkinter import *
 from tkinter.ttk import *
-from tkinter import filedialog, messagebox, scrolledtext
+from tkinter import filedialog, messagebox
 from PIL import Image, ImageTk
 
 img = None
@@ -14,81 +14,157 @@ size = 10
 
 
 def log():
-    open('MForge.config', 'w').write(f'{title}\n'
-                                     f'zoom={zoom}\n'
-                                     f'font={font}\n'
-                                     f'size={size}\n')
+    open('MForge.cfg', 'w').write(
+        f'# {title}\n'
+        f'zoom={zoom}\n'
+        f'font={font}\n'
+        f'size={size}\n'
+    )
 
 
-def resize(new):
-    global size
-    size = int(new)
-    if size <= 0:
-        size = 1
-    text.config(font=(font, size))
-    log()
+class ScrolledText(Text):
+    def __init__(self, master=None, **kw):
+        self.frame = Frame(master)
+        self.vbar = Scrollbar(self.frame)
+        self.vbar.pack(side=RIGHT, fill=Y)
+
+        kw.update({'yscrollcommand': self.vbar.set})
+        Text.__init__(self, self.frame, **kw)
+        self.pack(side=LEFT, fill=BOTH, expand=True)
+        self.vbar['command'] = self.yview
+
+        for m in (vars(Pack).keys() | vars(Grid).keys() | vars(Place).keys()).difference(vars(Text).keys()):
+            if m[0] != '_' and m != 'config' and m != 'configure':
+                setattr(self, m, getattr(self.frame, m))
+
+    def __str__(self):
+        return str(self.frame)
 
 
-def show(new=zoom):
-    global img
-    global zoom
-    zoom = new
-    canvas.update()
-    image = Image.open(tree.item(tree.focus())['values'][0])
-    img = ImageTk.PhotoImage(image.resize((int(image.width * zoom), int(image.height * zoom))))
-    canvas.create_image(canvas.winfo_width() / 2, canvas.winfo_height() / 2, image=img)
-    canvas.focus_set()
-    log()
+class ScrolledTreeview(Treeview):
+    def __init__(self, master=None, **kw):
+        self.frame = Frame(master)
+        self.vbar = Scrollbar(self.frame)
+        self.vbar.pack(side=RIGHT, fill=Y)
+
+        kw.update({'yscrollcommand': self.vbar.set})
+        Treeview.__init__(self, self.frame, **kw)
+        self.pack(side=LEFT, fill=BOTH, expand=True)
+        self.vbar['command'] = self.yview
+
+        for m in (vars(Pack).keys() | vars(Grid).keys() | vars(Place).keys()).difference(vars(Treeview).keys()):
+            if m[0] != '_' and m != 'config' and m != 'configure':
+                setattr(self, m, getattr(self.frame, m))
+
+    def __str__(self):
+        return str(self.frame)
 
 
-def load(Path, parent=''):
-    item = tree.insert(parent, END, text=os.path.basename(Path), values=[Path], open=True)
-    for i in os.listdir(Path):
-        path = os.path.join(Path, i)
-        if os.path.isdir(path):
-            load(path, item)
+class Page:
+    def __init__(self, master):
+        # pack
+        self.frame = Frame(master)
+        self.tree = ScrolledTreeview(self.frame, height=114514, show='tree', selectmode='browse')
+        self.text = ScrolledText(self.frame, width=1919810, font=(font, size), undo=True)
+        self.canvas = Canvas(self.frame, width=114514, height=1919810, cursor='hand2')
+        self.tree.pack(side=LEFT, fill=BOTH)
+        self.text.pack(side=RIGHT, fill=BOTH)
+
+        # bind
+        self.tree.bind('<ButtonRelease-1>', lambda event: self.Open(self.tree.item(self.tree.focus())['values'][0]))
+
+        self.text.bind('<Key>', lambda event: self.text.edit_separator())
+        self.text.bind('<Control-MouseWheel>', lambda event: self.resize(size + event.delta / 120))
+        self.text.bind('<Control-equal>', lambda event: self.resize(size + 1))
+        self.text.bind('<Control-minus>', lambda event: self.resize(size - 1))
+        self.text.bind('<Control-0>', lambda event: self.resize(10))
+        self.text.bind('<Control-z>', lambda event: self.text.edit_undo())
+        self.text.bind('<Control-y>', lambda event: self.text.edit_redo())
+        self.text.bind('<Control-s>', lambda event: [
+            open(self.tree.item(self.tree.focus())['values'][0], 'w', encoding='utf-8')
+                       .write(self.text.get('0.0', END)), messagebox.showinfo(title, 'Save successfully!')
+        ])
+
+        self.canvas.bind('<Configure>', lambda event: self.show(self.tree.item(self.tree.focus())['values'][0]))
+        self.canvas.bind('<Control-MouseWheel>', lambda event: self.show(self.tree.item(self.tree.focus())['values'][0],
+                                                                         zoom + event.delta / 120 / 5))
+        self.canvas.bind('<Control-equal>',
+                         lambda event: self.show(self.tree.item(self.tree.focus())['values'][0], zoom + 0.2))
+        self.canvas.bind('<Control-minus>',
+                         lambda event: self.show(self.tree.item(self.tree.focus())['values'][0], zoom - 0.2))
+        self.canvas.bind('<Control-0>', lambda event: self.show(self.tree.item(self.tree.focus())['values'][0], 1))
+
+    def resize(self, new):
+        global size
+        size = int(new)
+        if size <= 0:
+            size = 1
+        self.text.config(font=(font, size))
+        log()
+
+    def show(self, path, new=zoom):
+        global img
+        global zoom
+        zoom = new
+        self.canvas.update()
+        image = Image.open(path)
+        img = ImageTk.PhotoImage(image.resize((int(image.width * zoom), int(image.height * zoom))))
+        self.canvas.create_image(self.canvas.winfo_width() / 2, self.canvas.winfo_height() / 2, image=img)
+        self.canvas.focus_set()
+        log()
+
+    def load(self, Path, parent=''):
+        item = self.tree.insert(parent, END, text=basename(Path), values=[Path], open=True)
+        for i in listdir(Path):
+            path = join(Path, i)
+            if isdir(path):
+                self.load(path, item)
+            else:
+                self.tree.insert(item, END, text=i, values=[path], open=True)
+
+    def Open(self, path):
+        if path.endswith('.png') or path.endswith('.jpg'):
+            self.text.pack_forget()
+            self.canvas.pack(side=RIGHT, fill=BOTH)
+            self.show(path)
         else:
-            tree.insert(item, END, text=i, values=[path], open=True)
+            self.canvas.pack_forget()
+            self.text.delete('1.0', END)
+            if isdir(path):
+                self.text.pack_forget()
+                self.canvas.pack(side=RIGHT, fill=BOTH)
+                self.canvas.delete('all')
+            else:
+                self.text.pack(side=RIGHT, fill=BOTH)
+                try:
+                    self.text.insert('1.0', open(path, encoding='utf-8').read())
+                except UnicodeDecodeError:
+                    self.text.insert('1.0', open(path, 'br').read())
 
 
 def Open(path):
-    if path.endswith('.png') or path.endswith('.jpg'):
-        text.pack_forget()
-        canvas.pack(side='left', fill='both')
-        show()
-    else:
-        canvas.pack_forget()
-        text.delete('1.0', END)
-        if os.path.isdir(path):
-            text.pack_forget()
-        else:
-            text.pack(side='left', fill='both')
-            text.insert('1.0', open(path, encoding='utf-8').read())
-
-
-def config():
-    win = Toplevel(main)
-    win.geometry('320x240')
-    Label(win, text='font size:').pack()
-    spn = Spinbox(win, from_=1, to=100, font=(font, size), command=lambda: resize(spn.get()))
-    spn.pack()
-    main.mainloop()
+    page = Page(fme)
+    page.load(path)
+    book.add(page.frame, text=basename(path))
 
 
 if __name__ == '__main__':
 
     # config
-    for line in open('MForge.config').read().split('\n'):
-        if line != title:
-            lst = line.split('=')
-            if lst[0] == 'version':
-                version = lst[1]
-            if lst[0] == 'zoom':
-                zoom = float(lst[1])
-            elif lst[0] == 'font':
-                font = lst[1]
-            elif lst[0] == 'size':
-                size = int(lst[1])
+    if exists('MForge.cfg'):
+        for line in open('MForge.cfg').read().split('\n'):
+            if line != title:
+                lst = line.split('=')
+                if lst[0] == 'version':
+                    version = lst[1]
+                if lst[0] == 'zoom':
+                    zoom = float(lst[1])
+                elif lst[0] == 'font':
+                    font = lst[1]
+                elif lst[0] == 'size':
+                    size = int(lst[1])
+    else:
+        log()
 
     # window
     main = Tk()
@@ -97,57 +173,17 @@ if __name__ == '__main__':
 
     # widget
     fme = Frame(main)
-    tree = Treeview(fme, height=114514, show='tree', selectmode='browse')
-    bar = tk.Scrollbar(fme, command=tree.yview)
-    buff = Frame(fme, width=2, cursor='sb_h_double_arrow')
-    text = scrolledtext.ScrolledText(fme, width=1919810, font=(font, size), undo=True)
-    canvas = Canvas(fme, width=114514, height=1919810, cursor='hand2')
+    book = Notebook(fme)
+    fme.pack(padx=10, pady=10)
+    book.pack()
 
     # menu
-    menu = Menu()
-    file = Menu(tearoff=False)
-    edit = Menu(tearoff=False)
-    menu.add_cascade(label='file', menu=file)
-    menu.add_cascade(label='edit', menu=edit)
-    menu.add_command(label='config', command=lambda: config())
-    main.config(menu=menu)
-
-    # pack
-    fme.pack(padx=10, pady=10, fill='both')
-    tree.pack(side='left', fill='both')
-    bar.pack(side='left', fill='y')
-    buff.pack(side='left', fill='y')
-    text.pack(side='left', fill='both')
-
-    # bind
-    buff.bind('<B1-Motion>', lambda event: [
-        tree.pack_forget(),
-        tree.column('#0', width=tree.winfo_width() + event.x),
-        tree.pack(side='left', fill='both'),
-    ])
-
-    tree.bind('<ButtonRelease-1>', lambda event: Open(tree.item(tree.focus())['values'][0]))
-
-    text.bind('<Key>', lambda event: text.edit_separator())
-    text.bind('<Control-MouseWheel>', lambda event: resize(size + event.delta / 120))
-    text.bind('<Control-equal>', lambda event: resize(size + 1))
-    text.bind('<Control-minus>', lambda event: resize(size - 1))
-    text.bind('<Control-0>', lambda event: resize(10))
-    text.bind('<Control-z>', lambda event: text.edit_undo())
-    text.bind('<Control-y>', lambda event: text.edit_redo())
-    text.bind('<Control-s>', lambda event: [
-        open(tree.item(tree.focus())['values'][0], 'w').write(text.get('0.0', END)),
-        messagebox.showinfo(title, 'Save successfully!')
-    ])
-
-    canvas.bind('<Configure>', lambda event: show())
-    canvas.bind('<Control-MouseWheel>', lambda event: show(zoom + event.delta / 120 / 5))
-    canvas.bind('<Control-equal>', lambda event: show(zoom + 0.2))
-    canvas.bind('<Control-minus>', lambda event: show(zoom - 0.2))
-    canvas.bind('<Control-0>', lambda event: show(1))
-
-    # init
-    load(filedialog.askdirectory())
+    mainMenu = Menu(tearoff=False)
+    fileMenu = Menu(tearoff=False)
+    openMenu = Menu(tearoff=False)
+    mainMenu.add_cascade(label='file', menu=fileMenu)
+    fileMenu.add_command(label='open', command=lambda: Open(filedialog.askdirectory()))
+    main.config(menu=mainMenu)
 
     # mainloop
     main.mainloop()
